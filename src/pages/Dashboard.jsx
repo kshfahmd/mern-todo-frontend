@@ -133,7 +133,7 @@ function Dashboard() {
       {/* Navbar */}
       <div className="relative sticky top-0 z-50 backdrop-blur-xl bg-[#070A12]/70 border-b border-white/10">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2 group cursor-pointer">
+          <Link to="/dashboard" className="flex items-center gap-2 group cursor-pointer">
             <div className="h-9 w-9 rounded-xl bg-white/10 border border-white/10 grid place-items-center group-hover:bg-white/15 transition">
               <span className="text-sm font-bold">T</span>
             </div>

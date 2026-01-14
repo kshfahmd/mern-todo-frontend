@@ -55,9 +55,13 @@ function AnimatedRoutes() {
           <Route
             path="/"
             element={
-              <Page>
-                <Landing />
-              </Page>
+              localStorage.getItem("token") ? (
+                <Navigate to="/dashboard" />
+              ) : (
+                <Page>
+                  <Landing />
+                </Page>
+              )
             }
           />
 
