@@ -1,9 +1,53 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
+import toast from "react-hot-toast";
 
-import { createTodo, deleteTodo, getTodos, toggleTodo } from "../api/todoApi";
+import {
+  createTodo,
+  deleteTodo,
+  getTodos,
+  toggleTodo,
+  updateTodo,
+} from "../api/todoApi";
 import { getMe } from "../api/userApi";
+
+const priorityLabel = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
+
+const priorityStyle = {
+  low: "bg-green-500/15 text-green-200 border-green-500/20",
+  medium: "bg-yellow-500/15 text-yellow-200 border-yellow-500/20",
+  high: "bg-red-500/15 text-red-200 border-red-500/20",
+};
+
+function toISODate(dateStr) {
+  // dateStr = "YYYY-MM-DD"
+  if (!dateStr) return null;
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toISOString();
+}
+
+function toInputDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function isOverdue(iso) {
+  if (!iso) return false;
+  const due = new Date(iso);
+  const today = new Date();
+  due.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  return due.getTime() < today.getTime();
+}
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -15,11 +59,18 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // ✅ NEW: Filter + Search
+  // Filters + Search + Sorting
   const [filter, setFilter] = useState("all"); // all | pending | done
   const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState("created"); // created | dueDate | priority
 
-  // ---- stats (derived data) ----
+  // Editing
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [editDueDate, setEditDueDate] = useState(""); // YYYY-MM-DD
+  const [editPriority, setEditPriority] = useState("medium");
+
+  // Stats
   const stats = useMemo(() => {
     const total = todos.length;
     const done = todos.filter((t) => t.completed).length;
@@ -27,23 +78,9 @@ function Dashboard() {
     return { total, done, pending };
   }, [todos]);
 
-  // ✅ NEW: filtered todos
-  const filteredTodos = useMemo(() => {
-    let list = [...todos];
-
-    if (filter === "done") list = list.filter((t) => t.completed);
-    if (filter === "pending") list = list.filter((t) => !t.completed);
-
-    if (query.trim()) {
-      const q = query.toLowerCase();
-      list = list.filter((t) => t.text.toLowerCase().includes(q));
-    }
-
-    return list;
-  }, [todos, filter, query]);
-
   const logout = () => {
     localStorage.removeItem("token");
+    toast.success("Logged out");
     navigate("/login");
   };
 
@@ -57,6 +94,7 @@ function Dashboard() {
       setTodos(todoRes.data);
     } catch (err) {
       setError(err.response?.data?.message || "Failed to load dashboard");
+      toast.error("Failed to load dashboard");
     } finally {
       setLoading(false);
     }
@@ -66,17 +104,62 @@ function Dashboard() {
     loadAll();
   }, []);
 
+  // Filter + Search + Sorting
+  const filteredTodos = useMemo(() => {
+    let list = [...todos];
+
+    // tabs
+    if (filter === "done") list = list.filter((t) => t.completed);
+    if (filter === "pending") list = list.filter((t) => !t.completed);
+
+    // search
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      list = list.filter((t) => t.text.toLowerCase().includes(q));
+    }
+
+    // sorting
+    if (sortBy === "dueDate") {
+      list.sort((a, b) => {
+        const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+        const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+        return ad - bd;
+      });
+    } else if (sortBy === "priority") {
+      const rank = { high: 1, medium: 2, low: 3 };
+      list.sort((a, b) => (rank[a.priority] || 99) - (rank[b.priority] || 99));
+    } else {
+      list.sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    }
+
+    return list;
+  }, [todos, filter, query, sortBy]);
+
   const addTodo = async () => {
     const value = text.trim();
     if (!value) return;
 
     try {
       setError("");
-      const res = await createTodo({ text: value });
+      const res = await createTodo({
+        text: value,
+        priority: "medium",
+        dueDate: null,
+      });
+
       setTodos((prev) => [res.data, ...prev]);
       setText("");
+      toast.success("Task added");
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to add todo");
+      const msg =
+        err.response?.data?.message ||
+        err.response?.data?.errors?.[0]?.message ||
+        "Failed to add todo";
+      setError(msg);
+      toast.error(msg);
     }
   };
 
@@ -86,7 +169,9 @@ function Dashboard() {
       const res = await toggleTodo(id);
       setTodos((prev) => prev.map((t) => (t._id === id ? res.data : t)));
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to toggle todo");
+      const msg = err.response?.data?.message || "Failed to toggle todo";
+      setError(msg);
+      toast.error(msg);
     }
   };
 
@@ -95,8 +180,56 @@ function Dashboard() {
       setError("");
       await deleteTodo(id);
       setTodos((prev) => prev.filter((t) => t._id !== id));
+      toast.success("Task deleted");
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to delete todo");
+      const msg = err.response?.data?.message || "Failed to delete todo";
+      setError(msg);
+      toast.error(msg);
+    }
+  };
+
+  const startEdit = (todo) => {
+    setEditingId(todo._id);
+    setEditText(todo.text);
+    setEditPriority(todo.priority || "medium");
+    setEditDueDate(todo.dueDate ? toInputDate(todo.dueDate) : "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditText("");
+    setEditPriority("medium");
+    setEditDueDate("");
+  };
+
+  const saveEdit = async () => {
+    if (!editingId) return;
+
+    const value = editText.trim();
+    if (value.length < 2) {
+      toast.error("Todo text must be at least 2 characters");
+      return;
+    }
+
+    try {
+      const payload = {
+        text: value,
+        priority: editPriority,
+        dueDate: editDueDate ? toISODate(editDueDate) : null,
+      };
+
+      const res = await updateTodo(editingId, payload);
+
+      setTodos((prev) => prev.map((t) => (t._id === editingId ? res.data : t)));
+      toast.success("Task updated");
+      cancelEdit();
+    } catch (err) {
+      const msg =
+        err.response?.data?.message ||
+        err.response?.data?.errors?.[0]?.message ||
+        "Failed to update todo";
+      setError(msg);
+      toast.error(msg);
     }
   };
 
@@ -133,7 +266,7 @@ function Dashboard() {
       {/* Navbar */}
       <div className="relative sticky top-0 z-50 backdrop-blur-xl bg-[#070A12]/70 border-b border-white/10">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link to="/dashboard" className="flex items-center gap-2 group cursor-pointer">
+          <Link to="/" className="flex items-center gap-2 group cursor-pointer">
             <div className="h-9 w-9 rounded-xl bg-white/10 border border-white/10 grid place-items-center group-hover:bg-white/15 transition">
               <span className="text-sm font-bold">T</span>
             </div>
@@ -177,7 +310,7 @@ function Dashboard() {
               Your dashboard
             </h2>
             <p className="text-white/60 mt-2 max-w-xl">
-              Add tasks, mark them done, and keep your day simple.
+              Add tasks, set priorities, and never miss deadlines.
             </p>
           </div>
 
@@ -221,13 +354,7 @@ function Dashboard() {
               </button>
             </div>
 
-            <p className="text-xs text-white/40 mt-3">
-              Tip: press{" "}
-              <span className="text-white/70 font-semibold">Enter</span> to add
-              quickly.
-            </p>
-
-            {/* ✅ Filter + Search */}
+            {/* Tabs + Sort + Search */}
             <div className="mt-5 flex flex-col md:flex-row md:items-center gap-3">
               {/* Tabs */}
               <div className="flex items-center gap-2">
@@ -250,8 +377,18 @@ function Dashboard() {
                 ))}
               </div>
 
-              {/* Search */}
-              <div className="md:ml-auto">
+              {/* Sort + Search */}
+              <div className="md:ml-auto flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="w-full sm:w-44 px-4 py-2 rounded-2xl bg-black/30 border border-white/10 text-white/80 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+                >
+                  <option value="created">Sort: Newest</option>
+                  <option value="dueDate">Sort: Due date</option>
+                  <option value="priority">Sort: Priority</option>
+                </select>
+
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -260,6 +397,11 @@ function Dashboard() {
                 />
               </div>
             </div>
+
+            <p className="text-xs text-white/40 mt-3">
+              Tip: Use <span className="text-white/70 font-semibold">Edit</span>{" "}
+              to add due date + priority. Overdue tasks show a badge.
+            </p>
           </div>
 
           {/* List */}
@@ -275,60 +417,152 @@ function Dashboard() {
               <LayoutGroup>
                 <motion.div layout className="space-y-3">
                   <AnimatePresence initial={false}>
-                    {filteredTodos.map((todo) => (
-                      <motion.div
-                        key={todo._id}
-                        layout
-                        initial={{ opacity: 0, y: 10, scale: 0.98 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: -8, scale: 0.98 }}
-                        transition={{ duration: 0.22, ease: "easeOut" }}
-                        className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/20 px-4 py-3 hover:bg-white/5 hover:border-white/20 transition"
-                      >
-                        <button
-                          onClick={() => onToggle(todo._id)}
-                          className="flex items-center gap-3 text-left cursor-pointer"
+                    {filteredTodos.map((todo) => {
+                      const isEditing = editingId === todo._id;
+                      const overdue =
+                        !todo.completed && isOverdue(todo.dueDate);
+
+                      return (
+                        <motion.div
+                          key={todo._id}
+                          layout
+                          initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                          transition={{ duration: 0.22, ease: "easeOut" }}
+                          className="rounded-2xl border border-white/10 bg-black/20 hover:bg-white/5 hover:border-white/20 transition overflow-hidden"
                         >
-                          <motion.div
-                            className={`h-5 w-5 rounded-full border grid place-items-center ${
-                              todo.completed
-                                ? "bg-green-500/80 border-green-400/60"
-                                : "border-white/30"
-                            }`}
-                            whileTap={{ scale: 0.9 }}
-                          >
-                            <AnimatePresence>
-                              {todo.completed && (
-                                <motion.span
-                                  initial={{ scale: 0, opacity: 0 }}
-                                  animate={{ scale: 1, opacity: 1 }}
-                                  exit={{ scale: 0, opacity: 0 }}
-                                  transition={{ duration: 0.18 }}
-                                  className="h-2 w-2 bg-white rounded-full"
+                          {!isEditing ? (
+                            <div className="flex items-start justify-between px-4 py-4 gap-3">
+                              <button
+                                onClick={() => onToggle(todo._id)}
+                                className="flex items-start gap-3 text-left cursor-pointer flex-1"
+                              >
+                                <motion.div
+                                  className={`mt-1 h-5 w-5 rounded-full border grid place-items-center ${
+                                    todo.completed
+                                      ? "bg-green-500/80 border-green-400/60"
+                                      : "border-white/30"
+                                  }`}
+                                  whileTap={{ scale: 0.9 }}
+                                >
+                                  <AnimatePresence>
+                                    {todo.completed && (
+                                      <motion.span
+                                        initial={{ scale: 0, opacity: 0 }}
+                                        animate={{ scale: 1, opacity: 1 }}
+                                        exit={{ scale: 0, opacity: 0 }}
+                                        transition={{ duration: 0.18 }}
+                                        className="h-2 w-2 bg-white rounded-full"
+                                      />
+                                    )}
+                                  </AnimatePresence>
+                                </motion.div>
+
+                                <div className="flex flex-col">
+                                  <p
+                                    className={`text-sm ${
+                                      todo.completed
+                                        ? "text-white/40 line-through"
+                                        : "text-white/85"
+                                    }`}
+                                  >
+                                    {todo.text}
+                                  </p>
+
+                                  <div className="flex gap-2 mt-2 flex-wrap">
+                                    <span
+                                      className={`text-xs px-2 py-1 rounded-xl border ${
+                                        priorityStyle[todo.priority || "medium"]
+                                      }`}
+                                    >
+                                      {priorityLabel[todo.priority || "medium"]}
+                                    </span>
+
+                                    <span className="text-xs px-2 py-1 rounded-xl border border-white/10 bg-white/5 text-white/70">
+                                      Due:{" "}
+                                      {todo.dueDate
+                                        ? toInputDate(todo.dueDate)
+                                        : "None"}
+                                    </span>
+
+                                    {overdue && (
+                                      <span className="text-xs px-2 py-1 rounded-xl border border-red-500/20 bg-red-500/10 text-red-200">
+                                        Overdue
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </button>
+
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => startEdit(todo)}
+                                  className="text-xs px-3 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition cursor-pointer active:scale-[0.98]"
+                                >
+                                  Edit
+                                </button>
+
+                                <button
+                                  onClick={() => onDelete(todo._id)}
+                                  className="text-xs text-white/50 hover:text-red-300 transition cursor-pointer px-3 py-2 rounded-xl hover:bg-red-500/10 active:scale-[0.98]"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="px-4 py-4 space-y-3">
+                              <div className="flex flex-col md:flex-row gap-3">
+                                <input
+                                  value={editText}
+                                  onChange={(e) => setEditText(e.target.value)}
+                                  className="flex-1 px-4 py-3 rounded-2xl bg-black/30 border border-white/10 text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+                                  placeholder="Update todo text"
                                 />
-                              )}
-                            </AnimatePresence>
-                          </motion.div>
 
-                          <p
-                            className={`text-sm ${
-                              todo.completed
-                                ? "text-white/40 line-through"
-                                : "text-white/85"
-                            }`}
-                          >
-                            {todo.text}
-                          </p>
-                        </button>
+                                <select
+                                  value={editPriority}
+                                  onChange={(e) =>
+                                    setEditPriority(e.target.value)
+                                  }
+                                  className="md:w-40 px-4 py-3 rounded-2xl bg-black/30 border border-white/10 text-white/80 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+                                >
+                                  <option value="low">Low</option>
+                                  <option value="medium">Medium</option>
+                                  <option value="high">High</option>
+                                </select>
 
-                        <button
-                          onClick={() => onDelete(todo._id)}
-                          className="text-xs text-white/50 hover:text-red-300 transition cursor-pointer px-2 py-1 rounded-lg hover:bg-red-500/10 active:scale-[0.98]"
-                        >
-                          Delete
-                        </button>
-                      </motion.div>
-                    ))}
+                                <input
+                                  type="date"
+                                  value={editDueDate}
+                                  onChange={(e) =>
+                                    setEditDueDate(e.target.value)
+                                  }
+                                  className="md:w-48 px-4 py-3 rounded-2xl bg-black/30 border border-white/10 text-white/80 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+                                />
+                              </div>
+
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  onClick={cancelEdit}
+                                  className="px-4 py-2 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition cursor-pointer active:scale-[0.98]"
+                                >
+                                  Cancel
+                                </button>
+
+                                <button
+                                  onClick={saveEdit}
+                                  className="px-4 py-2 rounded-2xl bg-blue-600 hover:bg-blue-500 transition font-semibold text-white shadow-lg shadow-blue-600/25 cursor-pointer active:scale-[0.98]"
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </motion.div>
+                      );
+                    })}
                   </AnimatePresence>
                 </motion.div>
               </LayoutGroup>

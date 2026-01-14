@@ -11,3 +11,6 @@ export const toggleTodo = (id) => api.patch(`/api/todos/${id}/toggle`);
 
 // DELETE todo
 export const deleteTodo = (id) => api.delete(`/api/todos/${id}`);
+
+//UPDATE todo
+export const updateTodo = (id, data) => api.put(`/api/todos/${id}`, data);
