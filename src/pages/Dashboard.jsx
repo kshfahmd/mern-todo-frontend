@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 import toast from "react-hot-toast";
@@ -25,13 +25,14 @@ const priorityStyle = {
 };
 
 function toISODate(dateStr) {
-  // dateStr = "YYYY-MM-DD"
+  // "YYYY-MM-DD" -> ISO string at local midnight
   if (!dateStr) return null;
   const d = new Date(dateStr + "T00:00:00");
   return d.toISOString();
 }
 
 function toInputDate(iso) {
+  // ISO -> "YYYY-MM-DD" (for <input type="date">)
   if (!iso) return "";
   const d = new Date(iso);
   const yyyy = d.getFullYear();
@@ -48,36 +49,24 @@ function isOverdue(iso) {
   today.setHours(0, 0, 0, 0);
   return due.getTime() < today.getTime();
 }
-function formatDDMMYY(iso) {
-  if (!iso) return "None";
-  const d = new Date(iso);
 
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yy = String(d.getFullYear());
-
-  return `${dd}/${mm}/${yy}`;
-}
+// ✅ Human-friendly date display
 function formatDueDateSmart(iso) {
   if (!iso) return "None";
 
   const d = new Date(iso);
   const today = new Date();
 
-  // normalize to start of day (avoids time issues)
   d.setHours(0, 0, 0, 0);
   today.setHours(0, 0, 0, 0);
 
   const diffDays = Math.round((d - today) / (1000 * 60 * 60 * 24));
-
   if (diffDays === 0) return "Today";
   if (diffDays === 1) return "Tomorrow";
 
-  // default: DD/MM/YYYY
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yyyy = d.getFullYear();
-
   return `${dd}/${mm}/${yyyy}`;
 }
 
@@ -99,8 +88,12 @@ function Dashboard() {
   // Editing
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
-  const [editDueDate, setEditDueDate] = useState(""); // YYYY-MM-DD
+  const [editDueDate, setEditDueDate] = useState("");
   const [editPriority, setEditPriority] = useState("medium");
+  const editInputRef = useRef(null);
+
+  // For Undo delete
+  const undoTimerRef = useRef(null);
 
   // Stats
   const stats = useMemo(() => {
@@ -136,7 +129,21 @@ function Dashboard() {
     loadAll();
   }, []);
 
-  // Filter + Search + Sorting
+  // Autofocus edit input when entering edit mode
+  useEffect(() => {
+    if (editingId) {
+      setTimeout(() => editInputRef.current?.focus(), 50);
+    }
+  }, [editingId]);
+
+  // Clean up undo timer
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    };
+  }, []);
+
+  // Filter + Search + Sorting (with overdue priority inside due date sort)
   const filteredTodos = useMemo(() => {
     let list = [...todos];
 
@@ -153,6 +160,14 @@ function Dashboard() {
     // sorting
     if (sortBy === "dueDate") {
       list.sort((a, b) => {
+        const aOver = !a.completed && isOverdue(a.dueDate);
+        const bOver = !b.completed && isOverdue(b.dueDate);
+
+        // overdue first
+        if (aOver && !bOver) return -1;
+        if (!aOver && bOver) return 1;
+
+        // then by closest due date
         const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
         const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
         return ad - bd;
@@ -161,6 +176,7 @@ function Dashboard() {
       const rank = { high: 1, medium: 2, low: 3 };
       list.sort((a, b) => (rank[a.priority] || 99) - (rank[b.priority] || 99));
     } else {
+      // newest first
       list.sort(
         (a, b) =>
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -207,12 +223,52 @@ function Dashboard() {
     }
   };
 
+  // ✅ Undo delete (Gmail style)
   const onDelete = async (id) => {
     try {
       setError("");
-      await deleteTodo(id);
+
+      const deletedTodo = todos.find((t) => t._id === id);
+      if (!deletedTodo) return;
+
+      // optimistic remove
       setTodos((prev) => prev.filter((t) => t._id !== id));
-      toast.success("Task deleted");
+
+      // clear existing undo timer
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+
+      // show toast with undo
+      const toastId = toast(
+        (t) => (
+          <div className="flex items-center gap-3">
+            <span className="text-sm">Task deleted</span>
+            <button
+              className="text-sm font-semibold text-blue-300 hover:text-blue-200 cursor-pointer"
+              onClick={() => {
+                toast.dismiss(t.id);
+                setTodos((prev) => [deletedTodo, ...prev]);
+                toast.success("Undo successful");
+                if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+              }}
+            >
+              Undo
+            </button>
+          </div>
+        ),
+        { duration: 3500 }
+      );
+
+      // actually delete after delay
+      undoTimerRef.current = setTimeout(async () => {
+        try {
+          await deleteTodo(id);
+          toast.dismiss(toastId);
+        } catch (err) {
+          // rollback if server fails
+          setTodos((prev) => [deletedTodo, ...prev]);
+          toast.error("Delete failed, restored task");
+        }
+      }, 3500);
     } catch (err) {
       const msg = err.response?.data?.message || "Failed to delete todo";
       setError(msg);
@@ -265,8 +321,41 @@ function Dashboard() {
     }
   };
 
+  // ✅ Clear completed
+  const clearCompleted = async () => {
+    const completed = todos.filter((t) => t.completed);
+    if (completed.length === 0) {
+      toast("No completed tasks to clear");
+      return;
+    }
+
+    const confirmed = confirm(
+      `Clear ${completed.length} completed task(s)?`
+    );
+    if (!confirmed) return;
+
+    // optimistic update
+    const remaining = todos.filter((t) => !t.completed);
+    setTodos(remaining);
+
+    try {
+      // delete all completed (parallel)
+      await Promise.all(completed.map((t) => deleteTodo(t._id)));
+      toast.success("Completed tasks cleared");
+    } catch (err) {
+      toast.error("Failed to clear tasks, reloading...");
+      loadAll();
+    }
+  };
+
   const handleKeyDown = (e) => {
     if (e.key === "Enter") addTodo();
+  };
+
+  // ✅ Edit keyboard shortcuts: Enter = save, Esc = cancel
+  const handleEditKeyDown = (e) => {
+    if (e.key === "Escape") cancelEdit();
+    if (e.key === "Enter") saveEdit();
   };
 
   if (loading) {
@@ -356,6 +445,13 @@ function Dashboard() {
             <span className="px-3 py-2 rounded-2xl border border-white/10 bg-white/5 text-sm text-white/80">
               Pending: <span className="font-semibold">{stats.pending}</span>
             </span>
+
+            <button
+              onClick={clearCompleted}
+              className="px-3 py-2 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm cursor-pointer active:scale-[0.98]"
+            >
+              Clear completed
+            </button>
           </div>
         </motion.div>
 
@@ -431,8 +527,9 @@ function Dashboard() {
             </div>
 
             <p className="text-xs text-white/40 mt-3">
-              Tip: Use <span className="text-white/70 font-semibold">Edit</span>{" "}
-              to add due date + priority. Overdue tasks show a badge.
+              Tip: Enter adds tasks. Edit mode supports{" "}
+              <span className="text-white/70 font-semibold">Enter</span> to save &{" "}
+              <span className="text-white/70 font-semibold">Esc</span> to cancel.
             </p>
           </div>
 
@@ -451,8 +548,7 @@ function Dashboard() {
                   <AnimatePresence initial={false}>
                     {filteredTodos.map((todo) => {
                       const isEditing = editingId === todo._id;
-                      const overdue =
-                        !todo.completed && isOverdue(todo.dueDate);
+                      const overdue = !todo.completed && isOverdue(todo.dueDate);
 
                       return (
                         <motion.div
@@ -512,8 +608,7 @@ function Dashboard() {
                                     </span>
 
                                     <span className="text-xs px-2 py-1 rounded-xl border border-white/10 bg-white/5 text-white/70">
-                                     Due: {formatDueDateSmart(todo.dueDate)}
-
+                                      Due: {formatDueDateSmart(todo.dueDate)}
                                     </span>
 
                                     {overdue && (
@@ -545,8 +640,10 @@ function Dashboard() {
                             <div className="px-4 py-4 space-y-3">
                               <div className="flex flex-col md:flex-row gap-3">
                                 <input
+                                  ref={editInputRef}
                                   value={editText}
                                   onChange={(e) => setEditText(e.target.value)}
+                                  onKeyDown={handleEditKeyDown}
                                   className="flex-1 px-4 py-3 rounded-2xl bg-black/30 border border-white/10 text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
                                   placeholder="Update todo text"
                                 />
@@ -566,9 +663,7 @@ function Dashboard() {
                                 <input
                                   type="date"
                                   value={editDueDate}
-                                  onChange={(e) =>
-                                    setEditDueDate(e.target.value)
-                                  }
+                                  onChange={(e) => setEditDueDate(e.target.value)}
                                   className="md:w-48 px-4 py-3 rounded-2xl bg-black/30 border border-white/10 text-white/80 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
                                 />
                               </div>
