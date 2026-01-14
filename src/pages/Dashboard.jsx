@@ -48,6 +48,38 @@ function isOverdue(iso) {
   today.setHours(0, 0, 0, 0);
   return due.getTime() < today.getTime();
 }
+function formatDDMMYY(iso) {
+  if (!iso) return "None";
+  const d = new Date(iso);
+
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear());
+
+  return `${dd}/${mm}/${yy}`;
+}
+function formatDueDateSmart(iso) {
+  if (!iso) return "None";
+
+  const d = new Date(iso);
+  const today = new Date();
+
+  // normalize to start of day (avoids time issues)
+  d.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+
+  const diffDays = Math.round((d - today) / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Tomorrow";
+
+  // default: DD/MM/YYYY
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+
+  return `${dd}/${mm}/${yyyy}`;
+}
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -480,10 +512,8 @@ function Dashboard() {
                                     </span>
 
                                     <span className="text-xs px-2 py-1 rounded-xl border border-white/10 bg-white/5 text-white/70">
-                                      Due:{" "}
-                                      {todo.dueDate
-                                        ? toInputDate(todo.dueDate)
-                                        : "None"}
+                                     Due: {formatDueDateSmart(todo.dueDate)}
+
                                     </span>
 
                                     {overdue && (
