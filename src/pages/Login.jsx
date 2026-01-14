@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { loginUser } from "../api/authApi";
 import { Link, useNavigate } from "react-router-dom";
-import Container from "../components/Container";
+import AuthLayout from "../components/AuthLayout";
+import Spinner from "../components/Spinner";
 
 function Login() {
   const navigate = useNavigate();
@@ -9,6 +10,7 @@ function Login() {
   const [form, setForm] = useState({ email: "", password: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -21,17 +23,15 @@ function Login() {
     try {
       setLoading(true);
       const res = await loginUser(form);
-
       localStorage.setItem("token", res.data.token);
-      navigate("/dashboard");
+      setTimeout(() => navigate("/dashboard"), 200);
     } catch (err) {
       const apiMsg = err.response?.data?.message;
       const apiErrors = err.response?.data?.errors;
-
       if (apiErrors && Array.isArray(apiErrors)) {
         setError(apiErrors.map((e) => e.message).join(", "));
       } else {
-        setError(apiMsg || "Something went wrong");
+        setError(apiMsg || "Login failed");
       }
     } finally {
       setLoading(false);
@@ -39,63 +39,77 @@ function Login() {
   };
 
   return (
-    <Container>
-      <div className="bg-white rounded-2xl shadow p-6">
-        <h2 className="text-2xl font-bold text-slate-900">Welcome back</h2>
-        <p className="text-slate-500 mt-1">Login to continue</p>
+    <AuthLayout title="Welcome back" subtitle="Login to access your tasks">
+      {error && (
+        <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 text-red-200 px-4 py-3 text-sm">
+          {error}
+        </div>
+      )}
 
-        {error && (
-          <div className="mt-4 rounded-lg bg-red-50 border border-red-200 text-red-700 px-4 py-2 text-sm">
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <div>
-            <label className="text-sm font-medium text-slate-700">Email</label>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Email */}
+        <div>
+          <label className="text-sm text-white/70">Email</label>
+          <div className="mt-1 relative">
             <input
               name="email"
               placeholder="you@example.com"
               value={form.email}
               onChange={handleChange}
-              className="mt-1 w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={loading}
+              className="w-full px-4 py-3 rounded-2xl bg-black/30 border border-white/10 text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-70"
             />
           </div>
+        </div>
 
-          <div>
-            <label className="text-sm font-medium text-slate-700">
-              Password
-            </label>
+        {/* Password */}
+        <div>
+          <label className="text-sm text-white/70">Password</label>
+          <div className="mt-1 relative">
             <input
               name="password"
-              type="password"
+              type={showPwd ? "text" : "password"}
               placeholder="••••••••"
               value={form.password}
               onChange={handleChange}
-              className="mt-1 w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={loading}
+              className="w-full px-4 py-3 rounded-2xl bg-black/30 border border-white/10 text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-70 pr-14"
             />
+
+            <button
+              type="button"
+              onClick={() => setShowPwd((s) => !s)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/60 hover:text-white transition cursor-pointer"
+            >
+              {showPwd ? "Hide" : "Show"}
+            </button>
           </div>
+        </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full px-4 py-3 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-500 transition disabled:opacity-60"
-          >
-            {loading ? "Logging in..." : "Login"}
-          </button>
-        </form>
+        {/* Submit */}
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full px-4 py-3 rounded-2xl bg-blue-600 hover:bg-blue-500 transition font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-70 shadow-lg shadow-blue-600/25 active:scale-[0.99] cursor-pointer disabled:cursor-not-allowed"
+        >
+          {loading ? (
+            <>
+              <Spinner />
+              Logging in...
+            </>
+          ) : (
+            "Login"
+          )}
+        </button>
+      </form>
 
-        <p className="mt-5 text-sm text-slate-600">
-          New here?{" "}
-          <Link
-            to="/register"
-            className="text-blue-600 font-medium hover:underline"
-          >
-            Create an account
-          </Link>
-        </p>
-      </div>
-    </Container>
+      <p className="mt-5 text-sm text-white/60">
+        Don’t have an account?{" "}
+        <Link to="/register" className="text-blue-300 hover:text-blue-200">
+          Create one
+        </Link>
+      </p>
+    </AuthLayout>
   );
 }
 
